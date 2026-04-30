@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run unit tests
+        run: uv run pytest tests/test_slack.py tests/test_twilio_twiml.py -q
+
+      - name: Run e2e voice test
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
+          PIPECAT_CLOUD_SERVICE_HOST: ci-stub
+          TWILIO_ACCOUNT_SID: ACci_stub
+          TWILIO_AUTH_TOKEN: ci_stub
+          TWILIO_PHONE_NUMBER: "+15555550100"
+          JAN_PHONE_NUMBER: "+15555550199"
+        run: uv run pytest tests/e2e/ -q
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_LOG_CHANNEL_ID: ${{ secrets.SLACK_LOG_CHANNEL_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_LOG_CHANNEL_ID" ]; then
+            echo "Slack secrets missing — skipping notification."
+            exit 0
+          fi
+          if [ -n "$PR_NUMBER" ]; then
+            HEADER=":red_circle: CI failed on PR #${PR_NUMBER}"
+            CONTEXT_LINK="${PR_URL}"
+          else
+            HEADER=":red_circle: CI failed on push to ${REF}"
+            CONTEXT_LINK="${RUN_URL}"
+          fi
+          SHORT_SHA="${SHA:0:8}"
+          jq -nc \
+            --arg channel "$SLACK_LOG_CHANNEL_ID" \
+            --arg header "$HEADER" \
+            --arg link "$CONTEXT_LINK" \
+            --arg run "$RUN_URL" \
+            --arg sha "$SHORT_SHA" \
+            '{
+              channel: $channel,
+              text: ($header + " — " + $link),
+              blocks: [
+                {type:"section", text:{type:"mrkdwn", text:("*"+$header+"*")}},
+                {type:"context", elements:[
+                  {type:"mrkdwn", text:("commit `"+$sha+"` · <"+$run+"|run logs> · <"+$link+"|context>")}
+                ]}
+              ]
+            }' > /tmp/slack-payload.json
+          curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            --data-binary @/tmp/slack-payload.json \
+            -o /tmp/slack-response.json
+          if ! grep -q '"ok":true' /tmp/slack-response.json; then
+            echo "Slack post failed:"; cat /tmp/slack-response.json; exit 1
+          fi
