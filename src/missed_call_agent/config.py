@@ -32,15 +32,12 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
     deepgram_model: str = Field(default="nova-3", alias="DEEPGRAM_MODEL")
-    vad_confidence: float = Field(default=0.7, alias="VAD_CONFIDENCE")
-    elevenlabs_api_key: str | None = Field(default=None, alias="ELEVENLABS_API_KEY")
-    elevenlabs_voice_id: str = Field(default="21m00Tcm4TlvDq8ikWAM", alias="ELEVENLABS_VOICE_ID")
-    elevenlabs_model: str = Field(default="eleven_flash_v2_5", alias="ELEVENLABS_MODEL")
-    elevenlabs_stability: float = Field(default=0.5, alias="ELEVENLABS_STABILITY")
-    elevenlabs_similarity_boost: float = Field(default=0.8, alias="ELEVENLABS_SIMILARITY_BOOST")
-    elevenlabs_style: float = Field(default=0.0, alias="ELEVENLABS_STYLE")
-    elevenlabs_speed: float = Field(default=1.0, alias="ELEVENLABS_SPEED")
-    elevenlabs_use_speaker_boost: bool = Field(default=True, alias="ELEVENLABS_USE_SPEAKER_BOOST")
+    cartesia_api_key: str | None = Field(default=None, alias="CARTESIA_API_KEY")
+    cartesia_voice_id: str = Field(
+        default="62ae83ad-4f6a-430b-af41-a9bede9286ca",
+        alias="CARTESIA_VOICE_ID",
+    )
+    cartesia_model: str = Field(default="sonic-3", alias="CARTESIA_MODEL")
 
     def dial_status_url(self) -> str:
         if not self.public_base_url:
@@ -62,7 +59,7 @@ class Settings(BaseSettings):
             "TWILIO_AUTH_TOKEN": self.twilio_auth_token,
             "OPENAI_API_KEY": self.openai_api_key,
             "DEEPGRAM_API_KEY": self.deepgram_api_key,
-            "ELEVENLABS_API_KEY": self.elevenlabs_api_key,
+            "CARTESIA_API_KEY": self.cartesia_api_key,
         }
         return [key for key, value in required.items() if not value]
 

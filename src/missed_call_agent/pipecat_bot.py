@@ -1,6 +1,5 @@
 import datetime
 import io
-import os
 import wave
 from pathlib import Path
 from typing import Any
@@ -9,7 +8,6 @@ import aiofiles
 from loguru import logger
 from openai import AsyncOpenAI
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -23,18 +21,11 @@ from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.runner.types import WebSocketRunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
+from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
-from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy import (
-    MuteUntilFirstBotCompleteUserMuteStrategy,
-)
-from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
-    MinWordsUserTurnStartStrategy,
-)
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from .config import Settings, get_settings
 from .prompts import VOICEMAIL_GREETING, voicemail_instructions
@@ -138,20 +129,17 @@ async def finalize_record(record: CallRecord) -> None:
         logger.warning("Skipping Slack recap; missing SLACK_BOT_TOKEN or SLACK_CHANNEL_ID")
 
 
-PIPELINE_SAMPLE_RATE = 24000
-TWILIO_SAMPLE_RATE = 8000
-
-
 async def run_voicemail_pipeline(
     transport: BaseTransport,
     record: CallRecord,
     handle_sigint: bool,
 ) -> None:
     settings = get_settings()
+    logger.info("[debug] starting voicemail pipeline (caller={}, fallback_reason={})", record.caller_number, record.fallback_reason)
+
     llm = OpenAILLMService(api_key=settings.openai_api_key, model=settings.openai_model)
     stt = DeepgramSTTService(
         api_key=settings.deepgram_api_key or "",
-        sample_rate=PIPELINE_SAMPLE_RATE,
         live_options=LiveOptions(
             model=settings.deepgram_model,
             language="en",
@@ -160,33 +148,16 @@ async def run_voicemail_pipeline(
             interim_results=True,
         ),
     )
-    tts = ElevenLabsTTSService(
-        api_key=settings.elevenlabs_api_key or "",
-        voice_id=settings.elevenlabs_voice_id,
-        model=settings.elevenlabs_model,
-        sample_rate=PIPELINE_SAMPLE_RATE,
-        params=ElevenLabsTTSService.InputParams(
-            stability=settings.elevenlabs_stability,
-            similarity_boost=settings.elevenlabs_similarity_boost,
-            style=settings.elevenlabs_style,
-            speed=settings.elevenlabs_speed,
-            use_speaker_boost=settings.elevenlabs_use_speaker_boost,
-        ),
+    tts = CartesiaTTSService(
+        api_key=settings.cartesia_api_key or "",
+        voice_id=settings.cartesia_voice_id,
+        model=settings.cartesia_model,
     )
 
     context = LLMContext(messages=[{"role": "system", "content": voicemail_instructions(settings)}])
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(
-                sample_rate=PIPELINE_SAMPLE_RATE,
-                params=VADParams(confidence=settings.vad_confidence),
-            ),
-            user_turn_strategies=UserTurnStrategies(
-                start=[MinWordsUserTurnStartStrategy(min_words=2)],
-            ),
-            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
-        ),
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
     audio_buffer = AudioBufferProcessor()
 
@@ -205,8 +176,8 @@ async def run_voicemail_pipeline(
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
-            audio_in_sample_rate=PIPELINE_SAMPLE_RATE,
-            audio_out_sample_rate=PIPELINE_SAMPLE_RATE,
+            audio_in_sample_rate=8000,
+            audio_out_sample_rate=8000,
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
@@ -214,6 +185,7 @@ async def run_voicemail_pipeline(
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _client):
+        logger.info("[debug] on_client_connected — kicking off greeting")
         await audio_buffer.start_recording()
         context.add_message(
             {
@@ -225,10 +197,24 @@ async def run_voicemail_pipeline(
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(_transport, _client):
+        logger.info("[debug] on_client_disconnected — cancelling pipeline task")
         await task.cancel()
+
+    @stt.event_handler("on_speech_started")
+    async def _on_speech_started(_stt):
+        logger.info("[debug] STT detected speech start")
+
+    @stt.event_handler("on_utterance_end")
+    async def _on_utterance_end(_stt):
+        logger.info("[debug] STT detected utterance end")
+
+    @llm.event_handler("on_completion_timeout")
+    async def _on_llm_timeout(_llm):
+        logger.warning("[debug] LLM completion timeout fired")
 
     @audio_buffer.event_handler("on_audio_data")
     async def on_audio_data(_buffer, audio, sample_rate, num_channels):
+        logger.info("[debug] audio_buffer received {} bytes at {}Hz/{}ch", len(audio), sample_rate, num_channels)
         record.recording_ref = await save_audio(
             settings.call_output_dir / "recordings",
             record.room_name,
@@ -241,6 +227,7 @@ async def run_voicemail_pipeline(
     try:
         await runner.run(task)
     finally:
+        logger.info("[debug] pipeline finished — finalizing record (transcript len={})", len(transcript_from_context(context)))
         record.transcript = transcript_from_context(context)
         record.summary, record.action_items = await summarize_with_openai(settings, record.transcript)
         await finalize_record(record)
@@ -248,10 +235,12 @@ async def run_voicemail_pipeline(
 
 async def run_twilio_bot(runner_args: WebSocketRunnerArguments) -> None:
     settings = get_settings()
+    logger.info("[debug] run_twilio_bot — parsing telephony websocket")
     _, call_data = await parse_telephony_websocket(runner_args.websocket)
     body = call_data.get("body") or {}
     call_sid = call_data.get("call_id")
     stream_sid = call_data.get("stream_id")
+    logger.info("[debug] connected — call_sid={} stream_sid={} body_keys={}", call_sid, stream_sid, list(body.keys()))
 
     record = CallRecord(
         caller_number=_body_value(body, "caller", "From", "from"),
@@ -264,10 +253,6 @@ async def run_twilio_bot(runner_args: WebSocketRunnerArguments) -> None:
         call_sid=call_sid,
         account_sid=settings.twilio_account_sid,
         auth_token=settings.twilio_auth_token,
-        params=TwilioFrameSerializer.InputParams(
-            twilio_sample_rate=TWILIO_SAMPLE_RATE,
-            sample_rate=PIPELINE_SAMPLE_RATE,
-        ),
     )
     transport = FastAPIWebsocketTransport(
         websocket=runner_args.websocket,
