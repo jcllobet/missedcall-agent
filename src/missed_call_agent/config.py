@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     call_output_dir: Path = Field(default=Path("./data/calls"), alias="CALL_OUTPUT_DIR")
     slack_bot_token: str | None = Field(default=None, alias="SLACK_BOT_TOKEN")
     slack_channel_id: str | None = Field(default=None, alias="SLACK_CHANNEL_ID")
+    slack_log_channel_id: str | None = Field(default=None, alias="SLACK_LOG_CHANNEL_ID")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
