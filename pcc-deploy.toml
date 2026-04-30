@@ -1,0 +1,25 @@
+agent_name = "jan-ai-voicemail"
+secret_set = "jan-ai-voicemail-secrets"
+agent_profile = "agent-1x"
+region = "us-west"
+
+[scaling]
+min_agents = 1
+max_agents = 5
+
+[krisp_viva]
+audio_filter = "tel"
+
+[build]
+context_dir = "."
+dockerfile = "Dockerfile"
+
+[build.exclude]
+patterns = [
+  "archive/",
+  "data/",
+  "tests/",
+  "*.md",
+  ".env",
+  ".env.*",
+]
