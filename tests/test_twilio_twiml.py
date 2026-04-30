@@ -14,7 +14,7 @@ def configure_env(monkeypatch):
         "JAN_PHONE_NUMBER": "+15551111111",
         "OPENAI_API_KEY": "sk-test",
         "DEEPGRAM_API_KEY": "deepgram-test",
-        "ELEVENLABS_API_KEY": "elevenlabs-test",
+        "CARTESIA_API_KEY": "cartesia-test",
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
