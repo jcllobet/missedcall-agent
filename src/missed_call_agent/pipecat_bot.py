@@ -28,6 +28,13 @@ from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
+from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy import (
+    MuteUntilFirstBotCompleteUserMuteStrategy,
+)
+from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
+    MinWordsUserTurnStartStrategy,
+)
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from .config import Settings, get_settings
 from .prompts import VOICEMAIL_GREETING, voicemail_instructions
@@ -131,6 +138,10 @@ async def finalize_record(record: CallRecord) -> None:
         logger.warning("Skipping Slack recap; missing SLACK_BOT_TOKEN or SLACK_CHANNEL_ID")
 
 
+PIPELINE_SAMPLE_RATE = 24000
+TWILIO_SAMPLE_RATE = 8000
+
+
 async def run_voicemail_pipeline(
     transport: BaseTransport,
     record: CallRecord,
@@ -140,7 +151,7 @@ async def run_voicemail_pipeline(
     llm = OpenAILLMService(api_key=settings.openai_api_key, model=settings.openai_model)
     stt = DeepgramSTTService(
         api_key=settings.deepgram_api_key or "",
-        sample_rate=8000,
+        sample_rate=PIPELINE_SAMPLE_RATE,
         live_options=LiveOptions(
             model=settings.deepgram_model,
             language="en",
@@ -153,7 +164,7 @@ async def run_voicemail_pipeline(
         api_key=settings.elevenlabs_api_key or "",
         voice_id=settings.elevenlabs_voice_id,
         model=settings.elevenlabs_model,
-        sample_rate=8000,
+        sample_rate=PIPELINE_SAMPLE_RATE,
         params=ElevenLabsTTSService.InputParams(
             stability=settings.elevenlabs_stability,
             similarity_boost=settings.elevenlabs_similarity_boost,
@@ -168,9 +179,13 @@ async def run_voicemail_pipeline(
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(
-                sample_rate=8000,
+                sample_rate=PIPELINE_SAMPLE_RATE,
                 params=VADParams(confidence=settings.vad_confidence),
-            )
+            ),
+            user_turn_strategies=UserTurnStrategies(
+                start=[MinWordsUserTurnStartStrategy(min_words=2)],
+            ),
+            user_mute_strategies=[MuteUntilFirstBotCompleteUserMuteStrategy()],
         ),
     )
     audio_buffer = AudioBufferProcessor()
@@ -190,8 +205,8 @@ async def run_voicemail_pipeline(
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
-            audio_in_sample_rate=8000,
-            audio_out_sample_rate=8000,
+            audio_in_sample_rate=PIPELINE_SAMPLE_RATE,
+            audio_out_sample_rate=PIPELINE_SAMPLE_RATE,
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
@@ -249,6 +264,10 @@ async def run_twilio_bot(runner_args: WebSocketRunnerArguments) -> None:
         call_sid=call_sid,
         account_sid=settings.twilio_account_sid,
         auth_token=settings.twilio_auth_token,
+        params=TwilioFrameSerializer.InputParams(
+            twilio_sample_rate=TWILIO_SAMPLE_RATE,
+            sample_rate=PIPELINE_SAMPLE_RATE,
+        ),
     )
     transport = FastAPIWebsocketTransport(
         websocket=runner_args.websocket,
