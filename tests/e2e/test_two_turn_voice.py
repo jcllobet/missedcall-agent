@@ -26,8 +26,6 @@ from missed_call_agent.prompts import VOICEMAIL_GREETING, voicemail_instructions
 CARTESIA_BASE = "https://api.cartesia.ai"
 CARTESIA_VERSION = "2026-03-01"
 DEEPGRAM_BASE = "https://api.deepgram.com"
-BOT_VOICE_ID = "62ae83ad-4f6a-430b-af41-a9bede9286ca"
-HUMAN_VOICE_ID = "5ee9feff-1265-424a-9d7f-8e4d431a12c7"
 CARTESIA_MODEL = "sonic-3"
 
 HUMAN_TURNS = [
@@ -106,6 +104,8 @@ async def llm_reply(messages: list[dict], openai_api_key: str) -> str:
 
 async def test_two_turn_voice_conversation() -> None:
     cartesia_key = _required_env("CARTESIA_API_KEY")
+    bot_voice_id = _required_env("CARTESIA_VOICE_ID")
+    human_voice_id = _required_env("CARTESIA_TEST_HUMAN_VOICE_ID")
     deepgram_key = _required_env("DEEPGRAM_API_KEY")
     openai_key = _required_env("OPENAI_API_KEY")
 
@@ -127,7 +127,7 @@ async def test_two_turn_voice_conversation() -> None:
     # Bot turn 0 — greeting
     greeting = await llm_reply(messages, openai_key)
     assert greeting, "bot greeting was empty"
-    audio = await cartesia_tts(greeting, BOT_VOICE_ID, cartesia_key)
+    audio = await cartesia_tts(greeting, bot_voice_id, cartesia_key)
     assert len(audio) > MIN_AUDIO_BYTES, f"bot greeting audio too small: {len(audio)} bytes"
     bot_audio_chunks.append(audio)
     messages.append({"role": "assistant", "content": greeting})
@@ -135,7 +135,7 @@ async def test_two_turn_voice_conversation() -> None:
     # Human + bot turns
     for human_text in HUMAN_TURNS:
         # Synthetic human speaks (different Cartesia voice — distinguishable)
-        human_audio = await cartesia_tts(human_text, HUMAN_VOICE_ID, cartesia_key)
+        human_audio = await cartesia_tts(human_text, human_voice_id, cartesia_key)
         assert len(human_audio) > MIN_AUDIO_BYTES, "human audio too small"
 
         # STT
@@ -149,7 +149,7 @@ async def test_two_turn_voice_conversation() -> None:
         assert bot_text, "bot reply was empty"
 
         # Bot's TTS
-        bot_audio = await cartesia_tts(bot_text, BOT_VOICE_ID, cartesia_key)
+        bot_audio = await cartesia_tts(bot_text, bot_voice_id, cartesia_key)
         assert len(bot_audio) > MIN_AUDIO_BYTES, "bot reply audio too small"
         bot_audio_chunks.append(bot_audio)
         messages.append({"role": "assistant", "content": bot_text})

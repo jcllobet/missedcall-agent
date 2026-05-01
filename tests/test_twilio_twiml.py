@@ -8,7 +8,8 @@ from missed_call_agent.main import app
 def configure_env(monkeypatch):
     values = {
         "PUBLIC_BASE_URL": "https://example.ngrok.app",
-        "PIPECAT_CLOUD_SERVICE_HOST": "jan-ai-voicemail.jan-agent-swarm",
+        "PIPECAT_CLOUD_SERVICE_HOST": "test-agent.test-org",
+        "PCC_PUBLIC_KEY": "pk_test",
         "TWILIO_ACCOUNT_SID": "AC_test",
         "TWILIO_AUTH_TOKEN": "token",
         "TWILIO_PHONE_NUMBER": "+15550000000",
@@ -19,6 +20,11 @@ def configure_env(monkeypatch):
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
+
+    async def fake_pipecat_cloud_ws_url(settings):
+        return "wss://example.pipecat/ws/twilio/test-token"
+
+    monkeypatch.setattr("missed_call_agent.main.pipecat_cloud_ws_url", fake_pipecat_cloud_ws_url)
     get_settings.cache_clear()
 
 
@@ -236,8 +242,8 @@ def test_queue_result_streams_to_pipecat_when_not_bridged(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert '<Connect><Stream url="wss://api.pipecat.daily.co/ws/twilio">' in response.text
-    assert 'name="_pipecatCloudServiceHost" value="jan-ai-voicemail.jan-agent-swarm"' in response.text
+    assert '<Connect><Stream url="wss://example.pipecat/ws/twilio/test-token">' in response.text
+    assert "_pipecatCloudServiceHost" not in response.text
     assert 'name="fallback_reason" value="queue_leave"' in response.text
     assert 'name="caller" value="+15552222222"' in response.text
 

@@ -122,6 +122,14 @@ function attrsString(values = {}) {
 
 const { handler } = require("../functions/voice");
 
+global.fetch = async () => ({
+  ok: true,
+  json: async () => ({
+    wsUrl: "wss://example.pipecat/ws/twilio",
+    token: "test-token",
+  }),
+});
+
 function makeContext(overrides = {}) {
   const createdCalls = [];
   const updatedCalls = [];
@@ -139,8 +147,8 @@ function makeContext(overrides = {}) {
   return {
     context: {
       DOMAIN_NAME: "example-123.twil.io",
-      PIPECAT_CLOUD_SERVICE_HOST: "jan-ai-voicemail.jan-agent-swarm",
-      PIPECAT_CLOUD_WS_URL: "wss://api.pipecat.daily.co/ws/twilio",
+      PIPECAT_CLOUD_SERVICE_HOST: "test-agent.test-org",
+      PCC_PUBLIC_KEY: "pk_test",
       TWILIO_PHONE_NUMBER: "+15550000000",
       JAN_PHONE_NUMBER: "+15551111111",
       getTwilioClient: () => ({ calls }),
@@ -319,7 +327,8 @@ test("queue result that was not bridged streams caller to Pipecat", async () => 
     CallSid: "CA_inbound",
   });
 
-  assert.match(twiml, /<Connect><Stream url="wss:\/\/api\.pipecat\.daily\.co\/ws\/twilio">/);
+  assert.match(twiml, /<Connect><Stream url="wss:\/\/example\.pipecat\/ws\/twilio\/test-token">/);
+  assert.doesNotMatch(twiml, /_pipecatCloudServiceHost/);
   assert.match(twiml, /name="fallback_reason" value="queue_leave"/);
 });
 

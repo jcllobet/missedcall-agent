@@ -1,5 +1,6 @@
-agent_name = "jan-ai-voicemail"
-secret_set = "jan-ai-voicemail-secrets"
+agent_name = "your-agent-name"
+secret_set = "your-secret-set"
+websocket_auth = "token"
 agent_profile = "agent-1x"
 region = "us-west"
 
