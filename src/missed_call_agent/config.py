@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     twilio_phone_number: str | None = Field(default=None, alias="TWILIO_PHONE_NUMBER")
     jan_phone_number: str | None = Field(default=None, alias="JAN_PHONE_NUMBER")
     human_ring_timeout_seconds: int = Field(default=10, alias="HUMAN_RING_TIMEOUT_SECONDS")
+    ai_failsafe_wait_seconds: int = Field(default=10, alias="AI_FAILSAFE_WAIT_SECONDS")
     jan_context_url: str = Field(default="https://www.jcarbonell.com/", alias="JAN_CONTEXT_URL")
     call_recording_mode: str = Field(default="ai_only", alias="CALL_RECORDING_MODE")
     call_output_dir: Path = Field(default=Path("./data/calls"), alias="CALL_OUTPUT_DIR")
@@ -40,10 +41,13 @@ class Settings(BaseSettings):
     )
     cartesia_model: str = Field(default="sonic-3", alias="CARTESIA_MODEL")
 
-    def dial_status_url(self) -> str:
+    def voice_url(self, query: str = "") -> str:
         if not self.public_base_url:
             return ""
-        return self.public_base_url.rstrip("/") + "/dial-status"
+        suffix = "/voice"
+        if query:
+            suffix += "?" + query.lstrip("?")
+        return self.public_base_url.rstrip("/") + suffix
 
     def missing_call_control_config(self) -> list[str]:
         required = {
