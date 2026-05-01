@@ -168,12 +168,14 @@ async def test_two_turn_voice_conversation() -> None:
     assert all(len(chunk) > MIN_AUDIO_BYTES for chunk in bot_audio_chunks)
     assert all(transcript for transcript in transcripts)
 
-    # Sanity check: STT roughly captured the human script (loose contains-check
-    # so a missed word doesn't flake the test).
+    # Sanity check: STT roughly captured the human script. Keep this loose
+    # because short names can transcribe as common homophones.
+    token_variants = {"alice": ("alice",), "jan": ("jan", "jen")}
     for original, recovered in zip(HUMAN_TURNS, transcripts):
         # Pick a couple of distinctive lowercase tokens from the original.
-        for token in ("alice", "jan"):
+        for token, variants in token_variants.items():
             if token in original.lower():
-                assert token in recovered.lower(), (
+                recovered_lower = recovered.lower()
+                assert any(variant in recovered_lower for variant in variants), (
                     f"deepgram did not recover {token!r} from {original!r}; got {recovered!r}"
                 )
