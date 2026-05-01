@@ -8,11 +8,19 @@ from typing import Any
 import aiofiles
 from loguru import logger
 from openai import AsyncOpenAI
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import (
+    EndTaskFrame,
+    FunctionCallResultProperties,
+    LLMRunFrame,
+    TTSSpeakFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -22,6 +30,7 @@ from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.runner.types import WebSocketRunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
 from pipecat.services.openai.llm import OpenAILLMService
@@ -29,10 +38,20 @@ from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
 from .config import Settings, get_settings
-from .prompts import VOICEMAIL_GREETING, voicemail_instructions
+from .prompts import VOICEMAIL_ENDING, VOICEMAIL_GREETING, voicemail_instructions
 from .records import CallRecord, CallRecordStore, summarize_transcript_placeholder, utc_now
 from .slack import post_slack_recap
 from .slack_log import log_call_success, log_failure
+
+END_CALL_FUNCTION = FunctionSchema(
+    name="end_call",
+    description=(
+        "Say the final goodbye sentence and end the phone call when the voicemail "
+        "conversation is complete."
+    ),
+    properties={},
+    required=[],
+)
 
 
 def _slack_failure(settings: Settings, service: str, exc: BaseException, record: CallRecord) -> None:
@@ -143,6 +162,16 @@ async def finalize_record(record: CallRecord) -> None:
         logger.warning("Skipping Slack recap; missing SLACK_BOT_TOKEN or SLACK_CHANNEL_ID")
 
 
+async def end_call(params: FunctionCallParams) -> None:
+    params.context.add_message({"role": "assistant", "content": VOICEMAIL_ENDING})
+    await params.llm.push_frame(TTSSpeakFrame(VOICEMAIL_ENDING, append_to_context=False))
+    await params.result_callback(
+        {"status": "ending_call"},
+        properties=FunctionCallResultProperties(run_llm=False),
+    )
+    await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+
+
 async def run_voicemail_pipeline(
     transport: BaseTransport,
     record: CallRecord,
@@ -179,7 +208,11 @@ async def run_voicemail_pipeline(
         _slack_failure(settings, "cartesia", exc, record)
         raise
 
-    context = LLMContext(messages=[{"role": "system", "content": voicemail_instructions(settings)}])
+    llm.register_function("end_call", end_call)
+    context = LLMContext(
+        messages=[{"role": "system", "content": voicemail_instructions(settings)}],
+        tools=ToolsSchema(standard_tools=[END_CALL_FUNCTION]),
+    )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
