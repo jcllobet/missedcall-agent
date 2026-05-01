@@ -2,13 +2,13 @@ from collections.abc import Mapping
 from typing import Literal
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from twilio.rest import Client
 from twilio.twiml.voice_response import Connect, VoiceResponse
 
 from .config import Settings, get_settings
-from .records import CallRecordStore
 
 app = FastAPI(title="Jan AI Voicemail", version="0.1.0")
 FAILED_JAN_STATUSES = {"busy", "failed", "no-answer", "canceled"}
@@ -61,7 +61,31 @@ def voice_url(settings: Settings, **params: str) -> str:
     return settings.voice_url(urlencode(params))
 
 
-def ai_stream_twiml(
+async def pipecat_cloud_ws_url(settings: Settings) -> str:
+    if not settings.pipecat_cloud_service_host or not settings.pcc_public_key:
+        raise RuntimeError("PIPECAT_CLOUD_SERVICE_HOST and PCC_PUBLIC_KEY are required")
+
+    agent_name = settings.pipecat_cloud_service_host.split(".", 1)[0]
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.post(
+            f"https://api.pipecat.daily.co/v1/public/{agent_name}/start",
+            headers={
+                "Authorization": f"Bearer {settings.pcc_public_key}",
+                "Content-Type": "application/json",
+            },
+            json={"transport": "websocket"},
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    ws_url = data.get("wsUrl")
+    token = data.get("token")
+    if not ws_url or not token:
+        raise RuntimeError("Pipecat Cloud /start did not return wsUrl and token")
+    return f"{str(ws_url).rstrip('/')}/{token}"
+
+
+async def ai_stream_twiml(
     settings: Settings,
     form: Mapping[str, object],
     fallback_reason: str,
@@ -77,8 +101,7 @@ def ai_stream_twiml(
     """
     response = VoiceResponse()
     connect = Connect()
-    stream = connect.stream(url=settings.pipecat_cloud_ws_url)
-    stream.parameter(name="_pipecatCloudServiceHost", value=settings.pipecat_cloud_service_host or "")
+    stream = connect.stream(url=await pipecat_cloud_ws_url(settings))
     stream.parameter(name="fallback_reason", value=fallback_reason)
     stream.parameter(name="caller", value=str(form.get("From") or ""))
     stream.parameter(name="inbound_call_sid", value=str(form.get("CallSid") or form.get("caller") or ""))
@@ -202,13 +225,13 @@ def handle_queue_wait(settings: Settings, form: Mapping[str, object]) -> HTMLRes
     return twiml_response(response)
 
 
-def handle_queue_result(settings: Settings, form: Mapping[str, object]) -> HTMLResponse:
+async def handle_queue_result(settings: Settings, form: Mapping[str, object]) -> HTMLResponse:
     queue_result = str(form.get("QueueResult") or "timeout")
     if queue_result == "bridged":
         response = VoiceResponse()
         response.hangup()
         return twiml_response(response)
-    return ai_stream_twiml(settings, form, f"queue_{queue_result}")
+    return await ai_stream_twiml(settings, form, f"queue_{queue_result}")
 
 
 def handle_screen_prompt(settings: Settings, query: Mapping[str, str]) -> HTMLResponse:
@@ -290,7 +313,7 @@ async def voice(request: Request) -> HTMLResponse:
 
     match voice_event(query, form):
         case "force_ai":
-            return ai_stream_twiml(
+            return await ai_stream_twiml(
                 settings,
                 form,
                 query.get("fallback_reason") or "jan_not_accepted",
@@ -302,39 +325,10 @@ async def voice(request: Request) -> HTMLResponse:
         case "wait":
             return handle_queue_wait(settings, form)
         case "queue_result":
-            return handle_queue_result(settings, form)
+            return await handle_queue_result(settings, form)
         case "screen_prompt":
             return handle_screen_prompt(settings, query)
         case "screen_result":
             return handle_screen_result(settings, query, form)
         case "initial_call":
             return handle_initial_call(settings, form)
-
-
-@app.get("/twiml-preview", response_class=Response)
-def twiml_preview() -> Response:
-    settings = get_settings()
-    response = VoiceResponse()
-    response.enqueue(
-        "jan_CA_preview",
-        action=settings.voice_url("queue_result=1") or "https://example.com/voice?queue_result=1",
-        method="POST",
-        wait_url=settings.voice_url("wait=1") or "https://example.com/voice?wait=1",
-        wait_url_method="POST",
-    )
-    return Response(content=str(response), media_type="application/xml")
-
-
-@app.get("/calls")
-def list_calls() -> list[dict]:
-    settings = get_settings()
-    return CallRecordStore(settings.call_output_dir).list()
-
-
-@app.get("/calls/{call_id}")
-def get_call(call_id: str) -> dict:
-    settings = get_settings()
-    record = CallRecordStore(settings.call_output_dir).get(call_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="Call record not found")
-    return record

@@ -62,8 +62,8 @@ A real phone call proves both branches:
 
 ## Evidence Reviewed
 
-- Pipecat Cloud's Twilio guide says Twilio should stream to
-  `wss://api.pipecat.daily.co/ws/twilio` with `_pipecatCloudServiceHost`.
+- Pipecat Cloud's token-auth WebSocket flow says the Twilio webhook should call
+  `/start` and return a short-lived WebSocket URL in TwiML.
 - Pipecat's Twilio guide documents dial-out through Twilio REST and TwiML, but
   this MVP does not need Pipecat to initiate a separate bot-to-human call.
 - Pipecat Cloud agent images require a root `bot.py` with an async `bot()`
@@ -96,7 +96,7 @@ TwiML <Dial Jan timeout action=/dial-status>
 FastAPI POST /dial-status
   |
   v
-TwiML <Connect><Stream url=wss://api.pipecat.daily.co/ws/twilio>
+TwiML <Connect><Stream url=wss://.../<short-lived-token>>
   |
   v
 Pipecat Cloud bot.py
@@ -113,9 +113,8 @@ Slack recap
 - Move LiveKit files under `archive/livekit/` and remove LiveKit dependencies.
 - Replace the active server with FastAPI Twilio call-control webhooks.
 - Add a Pipecat Cloud `bot.py` entrypoint and `pcc-deploy.toml`.
-- Make the fallback TwiML stream to Pipecat Cloud with
-  `_pipecatCloudServiceHost`.
-- Add Pipecat, Twilio, Deepgram, and ElevenLabs dependencies.
+- Make the fallback TwiML stream to Pipecat Cloud with a per-call token URL.
+- Add Pipecat, Twilio, Deepgram, and Cartesia dependencies.
 - Update `.env.example` to only include the Pipecat/Twilio variables.
 - Keep the Jan voicemail prompt, record store, and Slack recap.
 - Update README with Twilio webhook setup and local ngrok test flow.
@@ -125,7 +124,6 @@ Slack recap
 - `uv run python -m compileall src tests`
 - `uv run pytest -q`
 - `GET /health` shows missing runtime variables until `.env` is filled.
-- `GET /twiml-preview` returns a `<Dial>` that points at `/dial-status`.
 - With ngrok, Pipecat Cloud, and real secrets, a missed call reaches Pipecat
   Cloud and produces a Slack recap.
 

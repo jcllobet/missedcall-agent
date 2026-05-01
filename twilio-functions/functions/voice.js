@@ -17,14 +17,36 @@ function queueName(callSid) {
 
 const FAILED_JAN_STATUSES = new Set(["busy", "failed", "no-answer", "canceled"]);
 
-function aiStream(twiml, context, event, fallbackReason) {
+async function pipecatCloudWsUrl(context) {
+  if (!context.PIPECAT_CLOUD_SERVICE_HOST || !context.PCC_PUBLIC_KEY) {
+    throw new Error("PIPECAT_CLOUD_SERVICE_HOST and PCC_PUBLIC_KEY are required");
+  }
+
+  const agentName = context.PIPECAT_CLOUD_SERVICE_HOST.split(".")[0];
+  const response = await fetch(`https://api.pipecat.daily.co/v1/public/${agentName}/start`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${context.PCC_PUBLIC_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ transport: "websocket" }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Pipecat Cloud /start failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (!data.wsUrl || !data.token) {
+    throw new Error("Pipecat Cloud /start did not return wsUrl and token");
+  }
+  return `${String(data.wsUrl).replace(/\/$/, "")}/${data.token}`;
+}
+
+async function aiStream(twiml, context, event, fallbackReason) {
   const connect = twiml.connect();
   const stream = connect.stream({
-    url: context.PIPECAT_CLOUD_WS_URL || "wss://api.pipecat.daily.co/ws/twilio",
-  });
-  stream.parameter({
-    name: "_pipecatCloudServiceHost",
-    value: context.PIPECAT_CLOUD_SERVICE_HOST,
+    url: await pipecatCloudWsUrl(context),
   });
   stream.parameter({ name: "fallback_reason", value: fallbackReason });
   stream.parameter({ name: "caller", value: event.From || "" });
@@ -49,7 +71,7 @@ exports.handler = async function handler(context, event, callback) {
 
   try {
     if (event.force_ai === "1") {
-      aiStream(twiml, context, event, event.fallback_reason || "jan_not_accepted");
+      await aiStream(twiml, context, event, event.fallback_reason || "jan_not_accepted");
       return callback(null, twiml);
     }
 
@@ -92,7 +114,7 @@ exports.handler = async function handler(context, event, callback) {
         return callback(null, twiml);
       }
 
-      aiStream(twiml, context, event, `queue_${event.QueueResult || "timeout"}`);
+      await aiStream(twiml, context, event, `queue_${event.QueueResult || "timeout"}`);
       return callback(null, twiml);
     }
 

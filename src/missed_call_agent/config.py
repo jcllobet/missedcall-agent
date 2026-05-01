@@ -14,10 +14,7 @@ class Settings(BaseSettings):
 
     public_base_url: str | None = Field(default=None, alias="PUBLIC_BASE_URL")
     pipecat_cloud_service_host: str | None = Field(default=None, alias="PIPECAT_CLOUD_SERVICE_HOST")
-    pipecat_cloud_ws_url: str = Field(
-        default="wss://api.pipecat.daily.co/ws/twilio",
-        alias="PIPECAT_CLOUD_WS_URL",
-    )
+    pcc_public_key: str | None = Field(default=None, alias="PCC_PUBLIC_KEY")
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
     twilio_phone_number: str | None = Field(default=None, alias="TWILIO_PHONE_NUMBER")
@@ -35,10 +32,7 @@ class Settings(BaseSettings):
     deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
     deepgram_model: str = Field(default="nova-3", alias="DEEPGRAM_MODEL")
     cartesia_api_key: str | None = Field(default=None, alias="CARTESIA_API_KEY")
-    cartesia_voice_id: str = Field(
-        default="62ae83ad-4f6a-430b-af41-a9bede9286ca",
-        alias="CARTESIA_VOICE_ID",
-    )
+    cartesia_voice_id: str = Field(default="", alias="CARTESIA_VOICE_ID")
     cartesia_model: str = Field(default="sonic-3", alias="CARTESIA_MODEL")
 
     def voice_url(self, query: str = "") -> str:
@@ -55,6 +49,7 @@ class Settings(BaseSettings):
             "TWILIO_PHONE_NUMBER": self.twilio_phone_number,
             "JAN_PHONE_NUMBER": self.jan_phone_number,
             "PIPECAT_CLOUD_SERVICE_HOST": self.pipecat_cloud_service_host,
+            "PCC_PUBLIC_KEY": self.pcc_public_key,
         }
         return [key for key, value in required.items() if not value]
 
@@ -65,6 +60,7 @@ class Settings(BaseSettings):
             "OPENAI_API_KEY": self.openai_api_key,
             "DEEPGRAM_API_KEY": self.deepgram_api_key,
             "CARTESIA_API_KEY": self.cartesia_api_key,
+            "CARTESIA_VOICE_ID": self.cartesia_voice_id,
         }
         return [key for key, value in required.items() if not value]
 

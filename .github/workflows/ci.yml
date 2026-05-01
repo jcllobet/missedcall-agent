@@ -41,7 +41,10 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
           CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
+          CARTESIA_VOICE_ID: ${{ secrets.CARTESIA_VOICE_ID }}
+          CARTESIA_TEST_HUMAN_VOICE_ID: ${{ secrets.CARTESIA_TEST_HUMAN_VOICE_ID }}
           PIPECAT_CLOUD_SERVICE_HOST: ci-stub
+          PCC_PUBLIC_KEY: pk_ci_stub
           TWILIO_ACCOUNT_SID: ACci_stub
           TWILIO_AUTH_TOKEN: ci_stub
           TWILIO_PHONE_NUMBER: "+15555550100"
