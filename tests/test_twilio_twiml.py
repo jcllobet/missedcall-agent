@@ -14,7 +14,7 @@ def configure_env(monkeypatch):
         "JAN_PHONE_NUMBER": "+15551111111",
         "OPENAI_API_KEY": "sk-test",
         "DEEPGRAM_API_KEY": "deepgram-test",
-        "ELEVENLABS_API_KEY": "elevenlabs-test",
+        "CARTESIA_API_KEY": "cartesia-test",
     }
     for key, value in values.items():
         monkeypatch.setenv(key, value)
@@ -31,7 +31,8 @@ def test_voice_twiml_dials_jan(monkeypatch):
     assert response.headers["content-type"].startswith("application/xml")
     assert '<Dial action="https://example.ngrok.app/dial-status"' in response.text
     assert 'answerOnBridge="true"' in response.text
-    assert '<Number>+15551111111</Number>' in response.text
+    assert '+15551111111</Number>' in response.text
+    assert 'machineDetection="Enable"' in response.text
 
 
 def test_dial_status_streams_to_pipecat_on_no_answer(monkeypatch):
@@ -55,12 +56,48 @@ def test_dial_status_streams_to_pipecat_on_no_answer(monkeypatch):
     assert 'name="caller" value="+15552222222"' in response.text
 
 
-def test_dial_status_hangs_up_after_completed_human_call(monkeypatch):
+def test_dial_status_hangs_up_after_human_answer(monkeypatch):
     configure_env(monkeypatch)
     client = TestClient(app)
 
-    response = client.post("/dial-status", data={"DialCallStatus": "completed"})
+    response = client.post(
+        "/dial-status",
+        data={"DialCallStatus": "completed", "AnsweredBy": "human"},
+    )
 
     assert response.status_code == 200
     assert "<Hangup" in response.text
     assert "<Stream" not in response.text
+
+
+def test_dial_status_streams_to_pipecat_when_voicemail_answered(monkeypatch):
+    configure_env(monkeypatch)
+    client = TestClient(app)
+
+    response = client.post(
+        "/dial-status",
+        data={
+            "DialCallStatus": "completed",
+            "AnsweredBy": "machine_start",
+            "From": "+15552222222",
+            "CallSid": "CA_inbound",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "<Stream" in response.text
+    assert 'name="fallback_reason" value="jan_machine_start"' in response.text
+
+
+def test_dial_status_streams_to_pipecat_on_unknown_answeredby(monkeypatch):
+    configure_env(monkeypatch)
+    client = TestClient(app)
+
+    response = client.post(
+        "/dial-status",
+        data={"DialCallStatus": "completed", "AnsweredBy": "unknown"},
+    )
+
+    assert response.status_code == 200
+    assert "<Stream" in response.text
+    assert 'name="fallback_reason" value="jan_unknown"' in response.text

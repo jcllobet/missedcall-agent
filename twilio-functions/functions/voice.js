@@ -3,10 +3,19 @@ exports.handler = function handler(context, event, callback) {
   const status = event.DialCallStatus;
 
   if (status) {
-    if (status === "completed" || status === "answered") {
+    const answeredBy = String(event.AnsweredBy || "").toLowerCase();
+    const isHumanAnswer =
+      (status === "completed" || status === "answered") &&
+      (answeredBy === "" || answeredBy === "human");
+
+    if (isHumanAnswer) {
       twiml.hangup();
       return callback(null, twiml);
     }
+
+    const fallbackReason = answeredBy
+      ? `jan_${answeredBy}`
+      : `jan_${String(status).replace(/-/g, "_")}`;
 
     const connect = twiml.connect();
     const stream = connect.stream({
@@ -16,10 +25,7 @@ exports.handler = function handler(context, event, callback) {
       name: "_pipecatCloudServiceHost",
       value: context.PIPECAT_CLOUD_SERVICE_HOST,
     });
-    stream.parameter({
-      name: "fallback_reason",
-      value: `jan_${String(status).replace(/-/g, "_")}`,
-    });
+    stream.parameter({ name: "fallback_reason", value: fallbackReason });
     stream.parameter({ name: "caller", value: event.From || "" });
     stream.parameter({ name: "inbound_call_sid", value: event.CallSid || "" });
     stream.parameter({ name: "dial_call_sid", value: event.DialCallSid || "" });
@@ -33,6 +39,15 @@ exports.handler = function handler(context, event, callback) {
     answerOnBridge: true,
     callerId: context.TWILIO_PHONE_NUMBER,
   });
-  dial.number(context.JAN_PHONE_NUMBER);
+  dial.number(
+    {
+      machineDetection: "Enable",
+      machineDetectionTimeout: 5,
+      machineDetectionSpeechThreshold: 1500,
+      machineDetectionSpeechEndThreshold: 800,
+      machineDetectionSilenceTimeout: 3000,
+    },
+    context.JAN_PHONE_NUMBER,
+  );
   return callback(null, twiml);
 };

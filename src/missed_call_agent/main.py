@@ -46,7 +46,14 @@ async def voice(request: Request) -> HTMLResponse:
         answer_on_bridge=True,
         caller_id=settings.twilio_phone_number,
     )
-    dial.number(settings.jan_phone_number)
+    dial.number(
+        settings.jan_phone_number,
+        machine_detection="Enable",
+        machine_detection_timeout=5,
+        machine_detection_speech_threshold=1500,
+        machine_detection_speech_end_threshold=800,
+        machine_detection_silence_timeout=3000,
+    )
     response.append(dial)
     return twiml_response(response)
 
@@ -60,16 +67,21 @@ async def dial_status(request: Request) -> HTMLResponse:
 
     form = await request.form()
     status = str(form.get("DialCallStatus") or "unknown")
-    if status in {"completed", "answered"}:
+    answered_by = str(form.get("AnsweredBy") or "").lower()
+    is_human_answer = status in {"completed", "answered"} and answered_by in {"", "human"}
+    if is_human_answer:
         response = VoiceResponse()
         response.hangup()
         return twiml_response(response)
 
+    fallback_reason = (
+        f"jan_{answered_by}" if answered_by else f"jan_{status.replace('-', '_')}"
+    )
     response = VoiceResponse()
     connect = Connect()
     stream = connect.stream(url=settings.pipecat_cloud_ws_url)
     stream.parameter(name="_pipecatCloudServiceHost", value=settings.pipecat_cloud_service_host or "")
-    stream.parameter(name="fallback_reason", value=f"jan_{status.replace('-', '_')}")
+    stream.parameter(name="fallback_reason", value=fallback_reason)
     stream.parameter(name="caller", value=str(form.get("From") or ""))
     stream.parameter(name="inbound_call_sid", value=str(form.get("CallSid") or ""))
     stream.parameter(name="dial_call_sid", value=str(form.get("DialCallSid") or ""))

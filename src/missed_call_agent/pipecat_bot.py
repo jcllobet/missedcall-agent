@@ -1,6 +1,6 @@
 import datetime
 import io
-import os
+import traceback
 import wave
 from pathlib import Path
 from typing import Any
@@ -9,7 +9,6 @@ import aiofiles
 from loguru import logger
 from openai import AsyncOpenAI
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -23,8 +22,8 @@ from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.runner.types import WebSocketRunnerArguments
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
+from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
@@ -33,6 +32,19 @@ from .config import Settings, get_settings
 from .prompts import VOICEMAIL_GREETING, voicemail_instructions
 from .records import CallRecord, CallRecordStore, summarize_transcript_placeholder, utc_now
 from .slack import post_slack_recap
+from .slack_log import log_call_success, log_failure
+
+
+def _slack_failure(settings: Settings, service: str, exc: BaseException, record: CallRecord) -> None:
+    log_failure(
+        settings.slack_bot_token,
+        settings.slack_log_channel_id,
+        service=service,
+        error_summary=f"{type(exc).__name__}: {exc}",
+        detail=traceback.format_exc(),
+        caller_number=record.caller_number,
+        call_sid=record.room_name,
+    )
 
 
 def _body_value(body: dict[str, Any], *keys: str) -> str | None:
@@ -137,41 +149,40 @@ async def run_voicemail_pipeline(
     handle_sigint: bool,
 ) -> None:
     settings = get_settings()
-    llm = OpenAILLMService(api_key=settings.openai_api_key, model=settings.openai_model)
-    stt = DeepgramSTTService(
-        api_key=settings.deepgram_api_key or "",
-        sample_rate=8000,
-        live_options=LiveOptions(
-            model=settings.deepgram_model,
-            language="en",
-            punctuate=True,
-            smart_format=True,
-            interim_results=True,
-        ),
-    )
-    tts = ElevenLabsTTSService(
-        api_key=settings.elevenlabs_api_key or "",
-        voice_id=settings.elevenlabs_voice_id,
-        model=settings.elevenlabs_model,
-        sample_rate=8000,
-        params=ElevenLabsTTSService.InputParams(
-            stability=settings.elevenlabs_stability,
-            similarity_boost=settings.elevenlabs_similarity_boost,
-            style=settings.elevenlabs_style,
-            speed=settings.elevenlabs_speed,
-            use_speaker_boost=settings.elevenlabs_use_speaker_boost,
-        ),
-    )
+
+    try:
+        llm = OpenAILLMService(api_key=settings.openai_api_key, model=settings.openai_model)
+    except Exception as exc:
+        _slack_failure(settings, "openai", exc, record)
+        raise
+    try:
+        stt = DeepgramSTTService(
+            api_key=settings.deepgram_api_key or "",
+            live_options=LiveOptions(
+                model=settings.deepgram_model,
+                language="en",
+                punctuate=True,
+                smart_format=True,
+                interim_results=True,
+            ),
+        )
+    except Exception as exc:
+        _slack_failure(settings, "deepgram", exc, record)
+        raise
+    try:
+        tts = CartesiaTTSService(
+            api_key=settings.cartesia_api_key or "",
+            voice_id=settings.cartesia_voice_id,
+            model=settings.cartesia_model,
+        )
+    except Exception as exc:
+        _slack_failure(settings, "cartesia", exc, record)
+        raise
 
     context = LLMContext(messages=[{"role": "system", "content": voicemail_instructions(settings)}])
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(
-                sample_rate=8000,
-                params=VADParams(confidence=settings.vad_confidence),
-            )
-        ),
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
     audio_buffer = AudioBufferProcessor()
 
@@ -223,17 +234,42 @@ async def run_voicemail_pipeline(
         )
 
     runner = PipelineRunner(handle_sigint=handle_sigint, force_gc=True)
+    pipeline_error: BaseException | None = None
     try:
         await runner.run(task)
+    except BaseException as exc:
+        pipeline_error = exc
+        _slack_failure(settings, "pipecat", exc, record)
+        raise
     finally:
         record.transcript = transcript_from_context(context)
-        record.summary, record.action_items = await summarize_with_openai(settings, record.transcript)
-        await finalize_record(record)
+        try:
+            record.summary, record.action_items = await summarize_with_openai(settings, record.transcript)
+        except Exception as exc:
+            _slack_failure(settings, "openai", exc, record)
+            record.summary, record.action_items = summarize_transcript_placeholder(record.transcript)
+        try:
+            await finalize_record(record)
+        except Exception as exc:
+            _slack_failure(settings, "slack", exc, record)
+        if pipeline_error is None:
+            log_call_success(
+                settings.slack_bot_token,
+                settings.slack_log_channel_id,
+                record.caller_number,
+                record.transcript,
+                record.room_name,
+            )
 
 
 async def run_twilio_bot(runner_args: WebSocketRunnerArguments) -> None:
     settings = get_settings()
-    _, call_data = await parse_telephony_websocket(runner_args.websocket)
+    placeholder_record = CallRecord(caller_number=None, room_name=None, fallback_reason="jan_no_answer")
+    try:
+        _, call_data = await parse_telephony_websocket(runner_args.websocket)
+    except Exception as exc:
+        _slack_failure(settings, "twilio", exc, placeholder_record)
+        raise
     body = call_data.get("body") or {}
     call_sid = call_data.get("call_id")
     stream_sid = call_data.get("stream_id")
