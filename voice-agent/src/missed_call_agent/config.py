@@ -5,6 +5,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DANISH_CARTESIA_VOICE_ID = "a466f9e2-28eb-4bb7-925c-8e8984950700"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=("../.env", "../.env.local", ".env", ".env.local"),
@@ -31,9 +34,11 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
     deepgram_api_key: str | None = Field(default=None, alias="DEEPGRAM_API_KEY")
     deepgram_model: str = Field(default="nova-3", alias="DEEPGRAM_MODEL")
+    deepgram_language: str = Field(default="da", alias="DEEPGRAM_LANGUAGE")
     cartesia_api_key: str | None = Field(default=None, alias="CARTESIA_API_KEY")
-    cartesia_voice_id: str = Field(default="", alias="CARTESIA_VOICE_ID")
+    cartesia_voice_id: str = Field(default=DANISH_CARTESIA_VOICE_ID, alias="CARTESIA_VOICE_ID")
     cartesia_model: str = Field(default="sonic-3", alias="CARTESIA_MODEL")
+    cartesia_language: str = Field(default="da", alias="CARTESIA_LANGUAGE")
 
     def voice_url(self, query: str = "") -> str:
         if not self.public_base_url:
