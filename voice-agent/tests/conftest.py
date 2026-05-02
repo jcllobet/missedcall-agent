@@ -4,7 +4,6 @@ In CI the secrets are injected via the workflow's env, so this no-op is
 fine when no .env is present.
 """
 
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv

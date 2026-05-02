@@ -33,6 +33,7 @@ from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService, LiveOptions
+from pipecat.transcriptions.language import Language
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
@@ -189,7 +190,7 @@ async def run_voicemail_pipeline(
             api_key=settings.deepgram_api_key or "",
             live_options=LiveOptions(
                 model=settings.deepgram_model,
-                language="en",
+                language=settings.deepgram_language,
                 punctuate=True,
                 smart_format=True,
                 interim_results=True,
@@ -203,6 +204,7 @@ async def run_voicemail_pipeline(
             api_key=settings.cartesia_api_key or "",
             voice_id=settings.cartesia_voice_id,
             model=settings.cartesia_model,
+            params=CartesiaTTSService.InputParams(language=Language(settings.cartesia_language)),
         )
     except Exception as exc:
         _slack_failure(settings, "cartesia", exc, record)

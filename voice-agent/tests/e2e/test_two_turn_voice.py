@@ -30,8 +30,8 @@ CARTESIA_MODEL = "sonic-3"
 DEFAULT_HUMAN_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
 
 HUMAN_TURNS = [
-    "Hi, this is Alice from Acme. I'd like to leave a message about a meeting tomorrow at 3 pm.",
-    "Yes, please tell Jan to confirm by email.",
+    "Hej, det er Alice fra Acme. Jeg vil gerne lægge en besked om et møde i morgen klokken tre.",
+    "Ja, det er korrekt. Jan skal bekræfte mødet på mail, når han har tid.",
 ]
 
 MIN_AUDIO_BYTES = 2000  # WAV header + a few samples; anything smaller is suspect
@@ -45,7 +45,7 @@ def _required_env(name: str) -> str:
     return value
 
 
-async def cartesia_tts(text: str, voice_id: str, api_key: str) -> bytes:
+async def cartesia_tts(text: str, voice_id: str, api_key: str, language: str) -> bytes:
     payload = {
         "model_id": CARTESIA_MODEL,
         "transcript": text,
@@ -55,7 +55,7 @@ async def cartesia_tts(text: str, voice_id: str, api_key: str) -> bytes:
             "encoding": "pcm_s16le",
             "sample_rate": 16000,
         },
-        "language": "en",
+        "language": language,
         "generation_config": {"speed": 1, "volume": 1},
     }
     async with httpx.AsyncClient(timeout=60) as client:
@@ -72,10 +72,14 @@ async def cartesia_tts(text: str, voice_id: str, api_key: str) -> bytes:
         return response.content
 
 
-async def deepgram_transcribe(audio_wav: bytes, api_key: str) -> str:
+async def deepgram_transcribe(audio_wav: bytes, api_key: str, language: str) -> str:
     async with httpx.AsyncClient(timeout=60) as client:
+        url = (
+            f"{DEEPGRAM_BASE}/v1/listen"
+            f"?model=nova-3&language={language}&smart_format=true&punctuate=true"
+        )
         response = await client.post(
-            f"{DEEPGRAM_BASE}/v1/listen?model=nova-3&smart_format=true&punctuate=true",
+            url,
             headers={
                 "Authorization": f"Token {api_key}",
                 "Content-Type": "audio/wav",
@@ -111,6 +115,8 @@ async def test_two_turn_voice_conversation() -> None:
     openai_key = _required_env("OPENAI_API_KEY")
 
     settings = get_settings()
+    cartesia_language = settings.cartesia_language
+    deepgram_language = settings.deepgram_language
     messages: list[dict] = [
         {"role": "system", "content": voicemail_instructions(settings)},
         {
@@ -128,7 +134,7 @@ async def test_two_turn_voice_conversation() -> None:
     # Bot turn 0 — greeting
     greeting = await llm_reply(messages, openai_key)
     assert greeting, "bot greeting was empty"
-    audio = await cartesia_tts(greeting, bot_voice_id, cartesia_key)
+    audio = await cartesia_tts(greeting, bot_voice_id, cartesia_key, cartesia_language)
     assert len(audio) > MIN_AUDIO_BYTES, f"bot greeting audio too small: {len(audio)} bytes"
     bot_audio_chunks.append(audio)
     messages.append({"role": "assistant", "content": greeting})
@@ -136,11 +142,11 @@ async def test_two_turn_voice_conversation() -> None:
     # Human + bot turns
     for human_text in HUMAN_TURNS:
         # Synthetic human speaks (different Cartesia voice — distinguishable)
-        human_audio = await cartesia_tts(human_text, human_voice_id, cartesia_key)
+        human_audio = await cartesia_tts(human_text, human_voice_id, cartesia_key, cartesia_language)
         assert len(human_audio) > MIN_AUDIO_BYTES, "human audio too small"
 
         # STT
-        transcript = await deepgram_transcribe(human_audio, deepgram_key)
+        transcript = await deepgram_transcribe(human_audio, deepgram_key, deepgram_language)
         assert transcript, f"deepgram returned empty transcript for: {human_text!r}"
         transcripts.append(transcript)
         messages.append({"role": "user", "content": transcript})
@@ -150,7 +156,7 @@ async def test_two_turn_voice_conversation() -> None:
         assert bot_text, "bot reply was empty"
 
         # Bot's TTS
-        bot_audio = await cartesia_tts(bot_text, bot_voice_id, cartesia_key)
+        bot_audio = await cartesia_tts(bot_text, bot_voice_id, cartesia_key, cartesia_language)
         assert len(bot_audio) > MIN_AUDIO_BYTES, "bot reply audio too small"
         bot_audio_chunks.append(bot_audio)
         messages.append({"role": "assistant", "content": bot_text})
@@ -171,7 +177,10 @@ async def test_two_turn_voice_conversation() -> None:
 
     # Sanity check: STT roughly captured the human script. Keep this loose
     # because short names can transcribe as common homophones.
-    token_variants = {"alice": ("alice",), "jan": ("jan", "jen")}
+    token_variants = {
+        "møde": ("møde", "mode"),
+        "bekræfte": ("bekræfte", "bekraefte", "bekræft"),
+    }
     for original, recovered in zip(HUMAN_TURNS, transcripts):
         # Pick a couple of distinctive lowercase tokens from the original.
         for token, variants in token_variants.items():

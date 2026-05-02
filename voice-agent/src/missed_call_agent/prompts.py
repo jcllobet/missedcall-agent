@@ -1,6 +1,6 @@
 from .config import Settings
 
-VOICEMAIL_ENDING = "Thank you for calling Jan. Have a great day!"
+VOICEMAIL_ENDING = "Tak fordi du ringede til Jan. Hav en god dag!"
 
 
 def voicemail_instructions(settings: Settings) -> str:
@@ -63,9 +63,13 @@ Voice output rules:
 
 Use this context source when it helps: {settings.jan_context_url}
 Do not mention infrastructure providers, routing, fallback logic, or internal system details.
+
+From now on, you should only be speaking in Danish. The customers will speak back to you in danish as well. You MUST understand Danish and answer back in Danish, too.
 """.strip()
 
 
 VOICEMAIL_GREETING = (
-    "Jan's Assistant here. He can't pick up — what do you need from him? I'll help or pass him a message."
+    "Det er Jans assistent. Han kan ikke tage telefonen lige nu. "
+    "Hvad drejer det sig om? Jeg hjælper eller lægger en besked, "
+    "så Jan ved hvad han bør gøre."
 )
