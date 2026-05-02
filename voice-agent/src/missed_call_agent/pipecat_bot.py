@@ -38,7 +38,7 @@ from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
 
 from .config import Settings, get_settings
-from .prompts import VOICEMAIL_ENDING, VOICEMAIL_GREETING, voicemail_instructions
+from .prompts import VOICEMAIL_ENDING, VoiceProfile, voicemail_greeting, voicemail_instructions
 from .records import CallRecord, CallRecordStore, summarize_transcript_placeholder, utc_now
 from .slack import post_slack_recap
 from .slack_log import log_call_success, log_failure
@@ -124,6 +124,27 @@ async def summarize_with_openai(settings: Settings, transcript: list[dict[str, s
     return summary, action_items or ["Review transcript and follow up if needed."]
 
 
+async def fetch_voice_profile(settings: Settings, profile_id: str | None) -> VoiceProfile | None:
+    if not profile_id or not settings.product_api_base_url or not settings.product_api_key:
+        return None
+
+    url = f"{settings.product_api_base_url.rstrip('/')}/api/runtime/profiles/{profile_id}"
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(
+            url,
+            headers={"Authorization": f"Bearer {settings.product_api_key}"},
+        )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    data = response.json()
+    return VoiceProfile(
+        assistant_name=str(data.get("assistantName") or "AI Assistant"),
+        greeting=str(data.get("greeting") or ""),
+        system_prompt=str(data.get("systemPrompt") or ""),
+    )
+
+
 async def save_audio(output_dir: Path, call_sid: str | None, audio: bytes, sample_rate: int, channels: int) -> str | None:
     if not audio:
         return None
@@ -176,6 +197,7 @@ async def run_voicemail_pipeline(
     transport: BaseTransport,
     record: CallRecord,
     handle_sigint: bool,
+    profile: VoiceProfile | None = None,
 ) -> None:
     settings = get_settings()
 
@@ -210,7 +232,7 @@ async def run_voicemail_pipeline(
 
     llm.register_function("end_call", end_call)
     context = LLMContext(
-        messages=[{"role": "system", "content": voicemail_instructions(settings)}],
+        messages=[{"role": "system", "content": voicemail_instructions(settings, profile)}],
         tools=ToolsSchema(standard_tools=[END_CALL_FUNCTION]),
     )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -247,7 +269,10 @@ async def run_voicemail_pipeline(
         context.add_message(
             {
                 "role": "user",
-                "content": f"Start the call by greeting the caller with this exact message: {VOICEMAIL_GREETING}",
+                "content": (
+                    "Start the call by greeting the caller with this exact message: "
+                    f"{voicemail_greeting(profile)}"
+                ),
             }
         )
         await task.queue_frames([LLMRunFrame()])
@@ -312,6 +337,7 @@ async def run_twilio_bot(runner_args: WebSocketRunnerArguments) -> None:
         room_name=call_sid,
         fallback_reason=_body_value(body, "fallback_reason") or "jan_no_answer",
     )
+    profile = await fetch_voice_profile(settings, _body_value(body, "profile_id", "profileId"))
 
     serializer = TwilioFrameSerializer(
         stream_sid=stream_sid,
@@ -328,4 +354,4 @@ async def run_twilio_bot(runner_args: WebSocketRunnerArguments) -> None:
             serializer=serializer,
         ),
     )
-    await run_voicemail_pipeline(transport, record, runner_args.handle_sigint)
+    await run_voicemail_pipeline(transport, record, runner_args.handle_sigint, profile)

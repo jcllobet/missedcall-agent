@@ -22,6 +22,8 @@ Required runtime values:
 ```text
 PIPECAT_CLOUD_SERVICE_HOST=<agent-name>.<org-name>
 PCC_PUBLIC_KEY=<pipecat public key>
+PRODUCT_API_BASE_URL=
+PRODUCT_API_KEY=
 TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
 TWILIO_PHONE_NUMBER=
@@ -37,6 +39,10 @@ SLACK_CHANNEL_ID=
 `PCC_PUBLIC_KEY` lets the Twilio webhook request a short-lived authenticated
 Pipecat WebSocket URL for each fallback call. Keep `websocket_auth = "token"` in
 `pcc-deploy.toml`.
+
+`PRODUCT_API_BASE_URL` and `PRODUCT_API_KEY` are optional for the original
+single-profile flow. Set them when using `../web-app` so the Twilio Function can
+route calls by the number Twilio received.
 
 ## Deploy
 

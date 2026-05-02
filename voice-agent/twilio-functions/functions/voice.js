@@ -17,6 +17,33 @@ function queueName(callSid) {
 
 const FAILED_JAN_STATUSES = new Set(["busy", "failed", "no-answer", "canceled"]);
 
+async function runtimeProfile(context, event) {
+  const fallbackProfile = {
+    profileId: "",
+    twilioNumber: context.TWILIO_PHONE_NUMBER,
+    forwardingPhoneNumber: context.JAN_PHONE_NUMBER,
+    assistantName: "AI Assistant",
+  };
+
+  if (!context.PRODUCT_API_BASE_URL || !context.PRODUCT_API_KEY || !event.To) {
+    return fallbackProfile;
+  }
+
+  const url = new URL("/api/runtime/profiles/by-number", context.PRODUCT_API_BASE_URL);
+  url.searchParams.set("to", event.To);
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${context.PRODUCT_API_KEY}` },
+  });
+
+  if (response.status === 404) {
+    return fallbackProfile;
+  }
+  if (!response.ok) {
+    throw new Error(`Profile lookup failed: ${response.status}`);
+  }
+  return response.json();
+}
+
 async function pipecatCloudWsUrl(context) {
   if (!context.PIPECAT_CLOUD_SERVICE_HOST || !context.PCC_PUBLIC_KEY) {
     throw new Error("PIPECAT_CLOUD_SERVICE_HOST and PCC_PUBLIC_KEY are required");
@@ -50,18 +77,23 @@ async function aiStream(twiml, context, event, fallbackReason) {
   });
   stream.parameter({ name: "fallback_reason", value: fallbackReason });
   stream.parameter({ name: "caller", value: event.From || "" });
+  stream.parameter({ name: "profile_id", value: event.profile_id || "" });
   stream.parameter({ name: "inbound_call_sid", value: event.CallSid || event.caller || "" });
   stream.parameter({ name: "dial_call_sid", value: event.DialCallSid || "" });
 }
 
-async function redirectCallerToAi(context, callerSid, fallbackReason) {
+async function redirectCallerToAi(context, callerSid, fallbackReason, profileId) {
   if (!callerSid || !context.getTwilioClient) {
     return;
   }
 
   const client = context.getTwilioClient();
   await client.calls(callerSid).update({
-    url: voiceUrl(context, { force_ai: "1", fallback_reason: fallbackReason }),
+    url: voiceUrl(context, {
+      force_ai: "1",
+      fallback_reason: fallbackReason,
+      profile_id: profileId || "",
+    }),
     method: "POST",
   });
 }
@@ -78,7 +110,12 @@ exports.handler = async function handler(context, event, callback) {
     if (event.jan_call_status === "1") {
       const callStatus = String(event.CallStatus || "").toLowerCase();
       if (FAILED_JAN_STATUSES.has(callStatus)) {
-        await redirectCallerToAi(context, event.caller, `jan_${callStatus.replace(/-/g, "_")}`);
+        await redirectCallerToAi(
+          context,
+          event.caller,
+          `jan_${callStatus.replace(/-/g, "_")}`,
+          event.profile_id,
+        );
       }
       return callback(null, twiml);
     }
@@ -86,7 +123,7 @@ exports.handler = async function handler(context, event, callback) {
     if (event.amd_status === "1") {
       const answeredBy = String(event.AnsweredBy || "").toLowerCase();
       if (answeredBy && answeredBy !== "human") {
-        await redirectCallerToAi(context, event.caller, `jan_${answeredBy}`);
+        await redirectCallerToAi(context, event.caller, `jan_${answeredBy}`, event.profile_id);
       }
       return callback(null, twiml);
     }
@@ -124,6 +161,7 @@ exports.handler = async function handler(context, event, callback) {
           screen: "result",
           queue: event.queue || "",
           caller: event.caller || "",
+          profile_id: event.profile_id || "",
         }),
         method: "POST",
         numDigits: 1,
@@ -131,7 +169,7 @@ exports.handler = async function handler(context, event, callback) {
         input: "dtmf",
         actionOnEmptyResult: true,
       });
-      gather.say("Call for Jan. Press 1 to accept.");
+      gather.say("Incoming call. Press 1 to accept.");
       twiml.hangup();
       return callback(null, twiml);
     }
@@ -148,34 +186,57 @@ exports.handler = async function handler(context, event, callback) {
         return callback(null, twiml);
       }
 
-      await redirectCallerToAi(context, event.caller, "jan_not_accepted");
+      await redirectCallerToAi(context, event.caller, "jan_not_accepted", event.profile_id);
+      twiml.hangup();
+      return callback(null, twiml);
+    }
+
+    const profile = await runtimeProfile(context, event);
+    if (!profile.forwardingPhoneNumber || !profile.twilioNumber) {
+      twiml.say("This voicemail assistant is not configured yet. Please try again later.");
       twiml.hangup();
       return callback(null, twiml);
     }
 
     const callerSid = event.CallSid;
     const queue = queueName(callerSid);
+    const profileParam = profile.profileId ? { profile_id: profile.profileId } : {};
     const client = context.getTwilioClient();
     await client.calls.create({
-      to: context.JAN_PHONE_NUMBER,
-      from: context.TWILIO_PHONE_NUMBER,
-      url: voiceUrl(context, { screen: "prompt", queue, caller: callerSid || "" }),
+      to: profile.forwardingPhoneNumber,
+      from: profile.twilioNumber,
+      url: voiceUrl(context, {
+        screen: "prompt",
+        queue,
+        caller: callerSid || "",
+        ...profileParam,
+      }),
       method: "POST",
       timeout: Number.parseInt(context.HUMAN_RING_TIMEOUT_SECONDS || "10", 10),
-      statusCallback: voiceUrl(context, { jan_call_status: "1", queue, caller: callerSid || "" }),
+      statusCallback: voiceUrl(context, {
+        jan_call_status: "1",
+        queue,
+        caller: callerSid || "",
+        ...profileParam,
+      }),
       statusCallbackMethod: "POST",
       statusCallbackEvent: ["completed"],
       machineDetection: "Enable",
       asyncAmd: true,
-      asyncAmdStatusCallback: voiceUrl(context, { amd_status: "1", queue, caller: callerSid || "" }),
+      asyncAmdStatusCallback: voiceUrl(context, {
+        amd_status: "1",
+        queue,
+        caller: callerSid || "",
+        ...profileParam,
+      }),
       asyncAmdStatusCallbackMethod: "POST",
     });
 
     twiml.enqueue(
       {
-        action: "/voice?queue_result=1",
+        action: voicePath({ queue_result: "1", ...profileParam }),
         method: "POST",
-        waitUrl: "/voice?wait=1",
+        waitUrl: voicePath({ wait: "1" }),
         waitUrlMethod: "POST",
       },
       queue,

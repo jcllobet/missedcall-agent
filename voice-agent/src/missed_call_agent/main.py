@@ -61,6 +61,40 @@ def voice_url(settings: Settings, **params: str) -> str:
     return settings.voice_url(urlencode(params))
 
 
+def optional_profile_param(profile: Mapping[str, str] | None) -> dict[str, str]:
+    if profile and profile.get("profileId"):
+        return {"profile_id": profile["profileId"]}
+    return {}
+
+
+async def runtime_profile(settings: Settings, form: Mapping[str, object]) -> dict[str, str]:
+    fallback = {
+        "profileId": "",
+        "twilioNumber": settings.twilio_phone_number or "",
+        "forwardingPhoneNumber": settings.jan_phone_number or "",
+        "assistantName": "AI Assistant",
+    }
+    if not settings.product_api_base_url or not settings.product_api_key or not form.get("To"):
+        return fallback
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(
+            f"{settings.product_api_base_url.rstrip('/')}/api/runtime/profiles/by-number",
+            params={"to": str(form.get("To") or "")},
+            headers={"Authorization": f"Bearer {settings.product_api_key}"},
+        )
+    if response.status_code == 404:
+        return fallback
+    response.raise_for_status()
+    data = response.json()
+    return {
+        "profileId": str(data.get("profileId") or ""),
+        "twilioNumber": str(data.get("twilioNumber") or ""),
+        "forwardingPhoneNumber": str(data.get("forwardingPhoneNumber") or ""),
+        "assistantName": str(data.get("assistantName") or "AI Assistant"),
+    }
+
+
 async def pipecat_cloud_ws_url(settings: Settings) -> str:
     if not settings.pipecat_cloud_service_host or not settings.pcc_public_key:
         raise RuntimeError("PIPECAT_CLOUD_SERVICE_HOST and PCC_PUBLIC_KEY are required")
@@ -89,6 +123,7 @@ async def ai_stream_twiml(
     settings: Settings,
     form: Mapping[str, object],
     fallback_reason: str,
+    profile_id: str = "",
 ) -> HTMLResponse:
     """Return TwiML that connects the caller to Pipecat.
 
@@ -104,13 +139,19 @@ async def ai_stream_twiml(
     stream = connect.stream(url=await pipecat_cloud_ws_url(settings))
     stream.parameter(name="fallback_reason", value=fallback_reason)
     stream.parameter(name="caller", value=str(form.get("From") or ""))
+    stream.parameter(name="profile_id", value=profile_id)
     stream.parameter(name="inbound_call_sid", value=str(form.get("CallSid") or form.get("caller") or ""))
     stream.parameter(name="dial_call_sid", value=str(form.get("DialCallSid") or ""))
     response.append(connect)
     return twiml_response(response)
 
 
-def start_jan_screening_call(settings: Settings, queue: str, caller_sid: str) -> None:
+def start_jan_screening_call(
+    settings: Settings,
+    queue: str,
+    caller_sid: str,
+    profile: Mapping[str, str] | None = None,
+) -> None:
     """Start the separate outbound call that asks Jan to accept.
 
     Args:
@@ -124,22 +165,45 @@ def start_jan_screening_call(settings: Settings, queue: str, caller_sid: str) ->
         raise RuntimeError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN are required")
 
     Client(settings.twilio_account_sid, settings.twilio_auth_token).calls.create(
-        to=settings.jan_phone_number,
-        from_=settings.twilio_phone_number,
-        url=voice_url(settings, screen="prompt", queue=queue, caller=caller_sid),
+        to=(profile or {}).get("forwardingPhoneNumber") or settings.jan_phone_number,
+        from_=(profile or {}).get("twilioNumber") or settings.twilio_phone_number,
+        url=voice_url(
+            settings,
+            screen="prompt",
+            queue=queue,
+            caller=caller_sid,
+            **optional_profile_param(profile),
+        ),
         method="POST",
         timeout=settings.human_ring_timeout_seconds,
-        status_callback=voice_url(settings, jan_call_status="1", queue=queue, caller=caller_sid),
+        status_callback=voice_url(
+            settings,
+            jan_call_status="1",
+            queue=queue,
+            caller=caller_sid,
+            **optional_profile_param(profile),
+        ),
         status_callback_method="POST",
         status_callback_event=["completed"],
         machine_detection="Enable",
         async_amd=True,
-        async_amd_status_callback=voice_url(settings, amd_status="1", queue=queue, caller=caller_sid),
+        async_amd_status_callback=voice_url(
+            settings,
+            amd_status="1",
+            queue=queue,
+            caller=caller_sid,
+            **optional_profile_param(profile),
+        ),
         async_amd_status_callback_method="POST",
     )
 
 
-def redirect_caller_to_ai(settings: Settings, caller_sid: str, fallback_reason: str) -> None:
+def redirect_caller_to_ai(
+    settings: Settings,
+    caller_sid: str,
+    fallback_reason: str,
+    profile_id: str = "",
+) -> None:
     """Redirect a parked caller to the AI stream.
 
     Args:
@@ -153,7 +217,12 @@ def redirect_caller_to_ai(settings: Settings, caller_sid: str, fallback_reason: 
         return
 
     Client(settings.twilio_account_sid, settings.twilio_auth_token).calls(caller_sid).update(
-        url=voice_url(settings, force_ai="1", fallback_reason=fallback_reason),
+        url=voice_url(
+            settings,
+            force_ai="1",
+            fallback_reason=fallback_reason,
+            **({"profile_id": profile_id} if profile_id else {}),
+        ),
         method="POST",
     )
 
@@ -188,6 +257,18 @@ def empty_twiml() -> HTMLResponse:
     return twiml_response(VoiceResponse())
 
 
+def redirect_with_optional_profile(
+    settings: Settings,
+    caller_sid: str,
+    fallback_reason: str,
+    profile_id: str,
+) -> None:
+    if profile_id:
+        redirect_caller_to_ai(settings, caller_sid, fallback_reason, profile_id)
+    else:
+        redirect_caller_to_ai(settings, caller_sid, fallback_reason)
+
+
 def handle_jan_call_status(
     settings: Settings,
     query: Mapping[str, str],
@@ -195,10 +276,11 @@ def handle_jan_call_status(
 ) -> HTMLResponse:
     call_status = str(form.get("CallStatus") or "").lower()
     if call_status in FAILED_JAN_STATUSES:
-        redirect_caller_to_ai(
+        redirect_with_optional_profile(
             settings,
             query.get("caller") or "",
             f"jan_{call_status.replace('-', '_')}",
+            query.get("profile_id") or "",
         )
     return empty_twiml()
 
@@ -210,7 +292,12 @@ def handle_amd_status(
 ) -> HTMLResponse:
     answered_by = str(form.get("AnsweredBy") or "").lower()
     if answered_by and answered_by != "human":
-        redirect_caller_to_ai(settings, query.get("caller") or "", f"jan_{answered_by}")
+        redirect_with_optional_profile(
+            settings,
+            query.get("caller") or "",
+            f"jan_{answered_by}",
+            query.get("profile_id") or "",
+        )
     return empty_twiml()
 
 
@@ -225,28 +312,44 @@ def handle_queue_wait(settings: Settings, form: Mapping[str, object]) -> HTMLRes
     return twiml_response(response)
 
 
-async def handle_queue_result(settings: Settings, form: Mapping[str, object]) -> HTMLResponse:
+async def handle_queue_result(
+    settings: Settings,
+    query: Mapping[str, str],
+    form: Mapping[str, object],
+) -> HTMLResponse:
     queue_result = str(form.get("QueueResult") or "timeout")
     if queue_result == "bridged":
         response = VoiceResponse()
         response.hangup()
         return twiml_response(response)
-    return await ai_stream_twiml(settings, form, f"queue_{queue_result}")
+    return await ai_stream_twiml(
+        settings,
+        form,
+        f"queue_{queue_result}",
+        query.get("profile_id") or "",
+    )
 
 
 def handle_screen_prompt(settings: Settings, query: Mapping[str, str]) -> HTMLResponse:
     queue = query.get("queue") or ""
     caller = query.get("caller") or ""
+    profile_id = query.get("profile_id") or ""
     response = VoiceResponse()
     gather = response.gather(
-        action=voice_url(settings, screen="result", queue=queue, caller=caller),
+        action=voice_url(
+            settings,
+            screen="result",
+            queue=queue,
+            caller=caller,
+            **({"profile_id": profile_id} if profile_id else {}),
+        ),
         method="POST",
         num_digits=1,
         timeout=6,
         input="dtmf",
         action_on_empty_result=True,
     )
-    gather.say("Call for Jan. Press 1 to accept.")
+    gather.say("Incoming call. Press 1 to accept.")
     response.hangup()
     return twiml_response(response)
 
@@ -269,20 +372,33 @@ def handle_screen_result(
         dial.queue(queue)
         return twiml_response(response)
 
-    redirect_caller_to_ai(settings, caller, "jan_not_accepted")
+    redirect_with_optional_profile(
+        settings,
+        caller,
+        "jan_not_accepted",
+        query.get("profile_id") or "",
+    )
     response.hangup()
     return twiml_response(response)
 
 
-def handle_initial_call(settings: Settings, form: Mapping[str, object]) -> HTMLResponse:
+async def handle_initial_call(settings: Settings, form: Mapping[str, object]) -> HTMLResponse:
+    profile = await runtime_profile(settings, form)
+    if not profile.get("forwardingPhoneNumber") or not profile.get("twilioNumber"):
+        return unavailable_twiml("This voicemail assistant is not configured yet. Please try again later.")
+
     caller_sid = str(form.get("CallSid") or "")
     queue = queue_name(caller_sid)
-    start_jan_screening_call(settings, queue, caller_sid)
+    if profile.get("profileId"):
+        start_jan_screening_call(settings, queue, caller_sid, profile)
+    else:
+        start_jan_screening_call(settings, queue, caller_sid)
+    query = urlencode({"queue_result": "1", **optional_profile_param(profile)})
 
     response = VoiceResponse()
     response.enqueue(
         queue,
-        action=settings.voice_url("queue_result=1"),
+        action=settings.voice_url(query),
         method="POST",
         wait_url=settings.voice_url("wait=1"),
         wait_url_method="POST",
@@ -317,6 +433,7 @@ async def voice(request: Request) -> HTMLResponse:
                 settings,
                 form,
                 query.get("fallback_reason") or "jan_not_accepted",
+                query.get("profile_id") or "",
             )
         case "jan_call_status":
             return handle_jan_call_status(settings, query, form)
@@ -325,10 +442,10 @@ async def voice(request: Request) -> HTMLResponse:
         case "wait":
             return handle_queue_wait(settings, form)
         case "queue_result":
-            return await handle_queue_result(settings, form)
+            return await handle_queue_result(settings, query, form)
         case "screen_prompt":
             return handle_screen_prompt(settings, query)
         case "screen_result":
             return handle_screen_result(settings, query, form)
         case "initial_call":
-            return handle_initial_call(settings, form)
+            return await handle_initial_call(settings, form)
