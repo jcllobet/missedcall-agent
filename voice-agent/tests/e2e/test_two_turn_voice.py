@@ -27,6 +27,7 @@ CARTESIA_BASE = "https://api.cartesia.ai"
 CARTESIA_VERSION = "2026-03-01"
 DEEPGRAM_BASE = "https://api.deepgram.com"
 CARTESIA_MODEL = "sonic-3"
+DEFAULT_HUMAN_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
 
 HUMAN_TURNS = [
     "Hi, this is Alice from Acme. I'd like to leave a message about a meeting tomorrow at 3 pm.",
@@ -105,7 +106,7 @@ async def llm_reply(messages: list[dict], openai_api_key: str) -> str:
 async def test_two_turn_voice_conversation() -> None:
     cartesia_key = _required_env("CARTESIA_API_KEY")
     bot_voice_id = _required_env("CARTESIA_VOICE_ID")
-    human_voice_id = _required_env("CARTESIA_TEST_HUMAN_VOICE_ID")
+    human_voice_id = os.environ.get("CARTESIA_TEST_HUMAN_VOICE_ID") or DEFAULT_HUMAN_VOICE_ID
     deepgram_key = _required_env("DEEPGRAM_API_KEY")
     openai_key = _required_env("OPENAI_API_KEY")
 
