@@ -46,7 +46,7 @@ export default function RootLayout({
                   </Link>
                   <Link
                     className="flex h-9 items-center rounded-md bg-[#0f5132] px-3 text-sm font-medium text-white transition hover:bg-[#0b3d26]"
-                    href="/sign-in"
+                    href="/sign-up"
                   >
                     Sign up
                   </Link>

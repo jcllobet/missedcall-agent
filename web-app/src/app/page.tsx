@@ -80,7 +80,7 @@ function SignedOutHome() {
             <div className="mt-7 flex flex-wrap gap-3">
               <Link
                 className="flex h-11 items-center rounded-md bg-[#0f5132] px-5 text-sm font-semibold text-white transition hover:bg-[#0b3d26]"
-                href="/sign-in"
+                href="/sign-up"
               >
                 Create your AI voicemail
               </Link>
