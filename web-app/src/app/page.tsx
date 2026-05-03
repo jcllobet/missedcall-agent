@@ -11,6 +11,9 @@ function Field({
   placeholder,
   help,
   type = "text",
+  required = false,
+  minLength,
+  maxLength,
 }: {
   label: string;
   name: string;
@@ -18,6 +21,9 @@ function Field({
   placeholder?: string;
   help?: string;
   type?: string;
+  required?: boolean;
+  minLength?: number;
+  maxLength?: number;
 }) {
   return (
     <label className="grid gap-2">
@@ -27,6 +33,9 @@ function Field({
         defaultValue={defaultValue}
         name={name}
         placeholder={placeholder}
+        required={required}
+        minLength={minLength}
+        maxLength={maxLength}
         type={type}
       />
       {help ? <span className="text-xs leading-5 text-[#667064]">{help}</span> : null}
@@ -40,12 +49,18 @@ function TextArea({
   defaultValue,
   rows,
   help,
+  required = false,
+  minLength,
+  maxLength,
 }: {
   label: string;
   name: string;
   defaultValue: string;
   rows: number;
   help?: string;
+  required?: boolean;
+  minLength?: number;
+  maxLength?: number;
 }) {
   return (
     <label className="grid gap-2">
@@ -55,9 +70,24 @@ function TextArea({
         defaultValue={defaultValue}
         name={name}
         rows={rows}
+        required={required}
+        minLength={minLength}
+        maxLength={maxLength}
       />
       {help ? <span className="text-xs leading-5 text-[#667064]">{help}</span> : null}
     </label>
+  );
+}
+
+function StepPill({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return (
+    <span
+      className={`rounded-md px-3 py-1 text-xs font-semibold ${
+        active ? "bg-[#0f5132] text-white" : "bg-[#edf2ea] text-[#667064]"
+      }`}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -161,7 +191,11 @@ function SignedOutHome() {
   );
 }
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { userId } = await auth();
 
   if (!userId) {
@@ -169,6 +203,9 @@ export default async function Home() {
   }
 
   const profile = await getAssistantProfileForUser(userId);
+  const params = (await searchParams) || {};
+  const step = params.step === "prompt" ? "prompt" : "numbers";
+  const saved = params.saved === "1";
 
   return (
     <main className="mx-auto w-full max-w-6xl px-5 py-8">
@@ -178,74 +215,130 @@ export default async function Home() {
             ASSISTANT PROFILE
           </p>
           <h1 className="mt-2 text-3xl font-semibold text-[#111827]">
-            Call handling settings
+            Set up your AI voicemail
           </h1>
         </div>
         <p className="max-w-xl text-sm leading-6 text-[#4b5563]">
-          Give the user their assigned Twilio number, then have them put it here
-          with the phone number they want the assistant to ring first.
+          Start with the number callers use and the phone that should ring first.
+          Then tune what the assistant says.
         </p>
       </div>
 
-      <form
-        action={updateAssistantProfile}
-        className="rounded-lg border border-[#d9dfd3] bg-white p-5 shadow-sm"
-      >
-        <div className="grid gap-5 md:grid-cols-2">
-          <Field
-            defaultValue={profile.twilioNumber}
-            help="The Twilio number you assign manually."
-            label="Assigned Twilio number"
-            name="twilioNumber"
-            placeholder="+15551234567"
-            type="tel"
-          />
-          <Field
-            defaultValue={profile.forwardingPhoneNumber}
-            help="The phone that rings before AI voicemail takes over."
-            label="Forward calls to"
-            name="forwardingPhoneNumber"
-            placeholder="+15557654321"
-            type="tel"
-          />
-          <Field
-            defaultValue={profile.assistantName}
-            label="Assistant name"
-            name="assistantName"
-            placeholder="Jan's Assistant"
-          />
-          <Field
-            defaultValue={profile.slackWebhookUrl}
-            help="Optional for now. Leave blank if recaps stay in the existing Slack path."
-            label="Slack webhook"
-            name="slackWebhookUrl"
-            placeholder="https://hooks.slack.com/services/..."
-            type="url"
-          />
-        </div>
+      <div className="mb-5 flex gap-2">
+        <StepPill active={step === "numbers"}>1. Numbers</StepPill>
+        <StepPill active={step === "prompt"}>2. Greeting and prompt</StepPill>
+      </div>
 
-        <div className="mt-5 grid gap-5">
-          <TextArea
-            defaultValue={profile.greeting}
-            help="The first thing the AI says when the call falls back to voicemail."
-            label="Greeting"
-            name="greeting"
-            rows={3}
-          />
-          <TextArea
-            defaultValue={profile.systemPrompt}
-            help="Keep this direct. The assistant should ask one question at a time and capture the useful follow-up details."
-            label="Prompt"
-            name="systemPrompt"
-            rows={10}
-          />
-        </div>
+      {step === "numbers" ? (
+        <form
+          action={updateAssistantProfile}
+          className="rounded-lg border border-[#d9dfd3] bg-white p-5 shadow-sm"
+        >
+          <input name="intent" type="hidden" value="next" />
+          <div className="grid gap-5 md:grid-cols-2">
+            <Field
+              defaultValue={profile.twilioNumber}
+              help="The Twilio number assigned to this user. Use the number callers should save."
+              label="Send calls from"
+              name="twilioNumber"
+              placeholder="+15551234567"
+              required
+              type="tel"
+            />
+            <Field
+              defaultValue={profile.forwardingPhoneNumber}
+              help={`Defaults to the phone used at signup${
+                profile.ownerPhoneNumber ? `: ${profile.ownerPhoneNumber}` : "."
+              }`}
+              label="Forward calls to"
+              name="forwardingPhoneNumber"
+              placeholder="+15557654321"
+              required
+              type="tel"
+            />
+            <Field
+              defaultValue={profile.assistantName}
+              label="Assistant name"
+              maxLength={80}
+              minLength={2}
+              name="assistantName"
+              placeholder="AI Assistant"
+              required
+            />
+            <Field
+              defaultValue={profile.slackWebhookUrl}
+              help="Optional. Leave blank if recaps stay in the shared Slack path."
+              label="Slack webhook"
+              name="slackWebhookUrl"
+              placeholder="https://hooks.slack.com/services/..."
+              type="url"
+            />
+          </div>
 
-        <div className="mt-6 flex flex-col gap-3 border-t border-[#d9dfd3] pt-5 sm:flex-row sm:items-center sm:justify-between">
-          <p className="font-mono text-xs text-[#667064]">Profile ID: {profile.profileId}</p>
-          <SubmitButton />
-        </div>
-      </form>
+          <div className="mt-6 flex flex-col gap-3 border-t border-[#d9dfd3] pt-5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="font-mono text-xs text-[#667064]">Profile ID: {profile.profileId}</p>
+            <SubmitButton label="Next" pendingLabel="Saving..." />
+          </div>
+        </form>
+      ) : (
+        <form
+          action={updateAssistantProfile}
+          className="rounded-lg border border-[#d9dfd3] bg-white p-5 shadow-sm"
+        >
+          <input name="intent" type="hidden" value="savePrompt" />
+          <div className="mb-5 flex flex-col justify-between gap-2 border-b border-[#d9dfd3] pb-5 sm:flex-row sm:items-center">
+            <div>
+              <p className="text-sm font-semibold text-[#111827]">{profile.assistantName}</p>
+              <p className="mt-1 text-sm text-[#667064]">
+                {profile.twilioNumber || "No Twilio number yet"} to{" "}
+                {profile.forwardingPhoneNumber || profile.ownerPhoneNumber || "no forwarding number yet"}
+              </p>
+            </div>
+            <Link
+              className="text-sm font-semibold text-[#0f5132] hover:text-[#0b3d26]"
+              href="/"
+            >
+              Edit numbers
+            </Link>
+          </div>
+
+          {saved ? (
+            <p className="mb-4 rounded-md bg-[#dcefe3] px-3 py-2 text-sm font-medium text-[#0f5132]">
+              Saved.
+            </p>
+          ) : null}
+
+          <div className="grid gap-5">
+            <TextArea
+              defaultValue={profile.greeting}
+              help="The first thing the AI says. Keep it short enough to feel like a real voicemail pickup."
+              label="Greeting"
+              maxLength={500}
+              minLength={20}
+              name="greeting"
+              required
+              rows={3}
+            />
+            <TextArea
+              defaultValue={profile.systemPrompt}
+              help="Edit the behavior freely. The runtime still appends required voice, privacy, and call-ending guardrails so the agent keeps working."
+              label="Prompt"
+              maxLength={8000}
+              minLength={200}
+              name="systemPrompt"
+              required
+              rows={18}
+            />
+          </div>
+
+          <div className="mt-6 flex flex-col gap-3 border-t border-[#d9dfd3] pt-5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs leading-5 text-[#667064]">
+              Required runtime guardrails are applied after this prompt.
+            </p>
+            <SubmitButton label="Save greeting and prompt" pendingLabel="Saving..." />
+          </div>
+        </form>
+      )}
     </main>
   );
 }

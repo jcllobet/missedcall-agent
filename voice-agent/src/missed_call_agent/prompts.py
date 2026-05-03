@@ -7,6 +7,22 @@ VOICEMAIL_GREETING = (
     "Jan's Assistant here. He can't pick up — what do you need from him? I'll help or pass him a message."
 )
 
+CUSTOM_PROMPT_GUARDRAILS = f"""
+Required call-control rules:
+- The greeting is already handled. Listen to what the caller wants.
+- Keep the conversation moving toward a useful message or clear next step.
+- Capture the caller's name, callback number or email if needed, what they want,
+  and when follow-up is needed.
+- Do not pretend to transfer, schedule, or confirm anything unless the system
+  actually supports it.
+- Do not pretend the person you represent is live on the call.
+- Do not give away personal data.
+- If the call is obviously spam, do not reveal any personal information.
+- When you are ready to hang up and end the call after confirming there are no
+  more questions, use the end_call tool. It will say "{VOICEMAIL_ENDING}" and
+  end the call. Do not say that sentence yourself unless you are ending the call.
+""".strip()
+
 
 @dataclass(frozen=True)
 class VoiceProfile:
@@ -19,6 +35,8 @@ def voicemail_instructions(settings: Settings, profile: VoiceProfile | None = No
     if profile and profile.system_prompt:
         return f"""
 {profile.system_prompt.strip()}
+
+{CUSTOM_PROMPT_GUARDRAILS}
 
 Voice output rules:
 - Respond in plain text only. Never use JSON, markdown, lists, tables, code,
