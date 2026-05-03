@@ -38,7 +38,14 @@ function Field({
         maxLength={maxLength}
         type={type}
       />
-      {help ? <span className="text-xs leading-5 text-[#667064]">{help}</span> : null}
+      <span
+        aria-hidden={help ? undefined : true}
+        className={`min-h-5 text-xs leading-5 ${
+          help ? "text-[#667064]" : "text-transparent"
+        }`}
+      >
+        {help || "."}
+      </span>
     </label>
   );
 }
@@ -74,7 +81,14 @@ function TextArea({
         minLength={minLength}
         maxLength={maxLength}
       />
-      {help ? <span className="text-xs leading-5 text-[#667064]">{help}</span> : null}
+      <span
+        aria-hidden={help ? undefined : true}
+        className={`min-h-5 text-xs leading-5 ${
+          help ? "text-[#667064]" : "text-transparent"
+        }`}
+      >
+        {help || "."}
+      </span>
     </label>
   );
 }
