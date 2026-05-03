@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     )
 
     public_base_url: str | None = Field(default=None, alias="PUBLIC_BASE_URL")
+    product_api_base_url: str | None = Field(default=None, alias="PRODUCT_API_BASE_URL")
+    product_api_key: str | None = Field(default=None, alias="PRODUCT_API_KEY")
     pipecat_cloud_service_host: str | None = Field(default=None, alias="PIPECAT_CLOUD_SERVICE_HOST")
     pcc_public_key: str | None = Field(default=None, alias="PCC_PUBLIC_KEY")
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
